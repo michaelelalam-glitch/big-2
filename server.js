@@ -206,17 +206,40 @@ io.on('connection', (socket) => {
         if (!room) { socket.emit('error', { message: 'Room not found!' }); return; }
         if (!room.canStart()) { socket.emit('error', { message: 'Need 4 players to start!' }); return; }
         room.startGame();
-        io.to(data.roomCode).emit('gameStarted', {players: room.players.map(p => ({ name: p.name, position: p.position })), gameState: room.getGameState()});
+        
+        // Send individualized game state to each player
+        room.players.forEach((player, index) => {
+            io.to(player.socketId).emit('gameStarted', {
+                position: index,
+                players: room.players.map(p => ({ name: p.name, position: p.position })),
+                gameState: room.getGameState()
+            });
+        });
         console.log(`Game started in room ${data.roomCode}`);
     });
     socket.on('gameAction', (data) => {
         const room = rooms.get(data.roomCode);
         if (!room) { socket.emit('error', { message: 'Room not found!' }); return; }
+        
+        // Find the player's position by socket ID
+        const playerIndex = room.players.findIndex(p => p.socketId === socket.id);
+        if (playerIndex === -1) {
+            socket.emit('error', { message: 'Player not found in room!' });
+            return;
+        }
+        
         let result;
-        if (data.action === 'play') { result = room.handlePlay(data.position, data.cards); }
-        else if (data.action === 'pass') { result = room.handlePass(data.position); }
-        if (result.success) { io.to(data.roomCode).emit('gameState', room.getGameState()); }
-        else { socket.emit('error', { message: result.error }); }
+        if (data.action === 'play') { 
+            result = room.handlePlay(playerIndex, data.cards); 
+        } else if (data.action === 'pass') { 
+            result = room.handlePass(playerIndex); 
+        }
+        
+        if (result && result.success) { 
+            io.to(data.roomCode).emit('gameState', room.getGameState()); 
+        } else { 
+            socket.emit('error', { message: result.error }); 
+        }
     });
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);

@@ -2035,6 +2035,9 @@
                 }
             });
             
+            // Initialize player arrays
+            game.players = [[], [], [], []];
+            
             // Initialize game state
             updateGameState(data.gameState);
         }
@@ -2044,7 +2047,8 @@
             
             // Update game state
             game.currentPlayer = state.currentPlayer;
-            game.lastPlay = state.lastPlay;
+            game.lastPlay = state.lastPlay.map(c => new Card(c.suit, c.rank));
+            game.lastPlayType = state.lastPlayType;
             game.lastPlayPlayer = state.lastPlayPlayer;
             game.consecutivePasses = state.consecutivePasses;
             game.round = state.round;
@@ -2057,18 +2061,33 @@
                 
                 if (index === playerPosition) {
                     // Show full hand for current player
-                    game.players[index].hand = player.hand.map(c => {
+                    game.players[index] = player.hand.map(c => {
                         const card = new Card(c.suit, c.rank);
                         card.selected = false;
                         return card;
                     });
-                    game.renderHand(index);
+                    
+                    // Render hand with click handlers
+                    handElement.innerHTML = '';
+                    game.players[index].forEach(card => {
+                        const cardEl = card.toElement();
+                        cardEl.addEventListener('click', () => game.selectCard(card, cardEl));
+                        cardEl.addEventListener('keypress', (e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                game.selectCard(card, cardEl);
+                            }
+                        });
+                        handElement.appendChild(cardEl);
+                    });
                 } else {
                     // Show card backs for other players
+                    game.players[index] = new Array(player.cardCount).fill(null);
                     handElement.innerHTML = '';
                     for (let i = 0; i < player.cardCount; i++) {
                         const cardBack = document.createElement('div');
                         cardBack.className = 'card card-back';
+                        cardBack.setAttribute('aria-label', 'Hidden card');
                         cardBack.textContent = '🂠';
                         handElement.appendChild(cardBack);
                     }
@@ -2078,35 +2097,51 @@
             });
             
             // Update center play area
-            const centerCards = document.getElementById('center-cards');
-            centerCards.innerHTML = '';
-            if (state.lastPlay.length > 0) {
+            const playArea = document.getElementById('play-area');
+            playArea.innerHTML = '';
+            if (state.lastPlay && state.lastPlay.length > 0) {
                 state.lastPlay.forEach(c => {
                     const card = new Card(c.suit, c.rank);
-                    centerCards.appendChild(card.toElement());
+                    playArea.appendChild(card.toElement());
                 });
+            } else {
+                playArea.innerHTML = '<div style="color: #95a5a6;">Current trick will appear here</div>';
             }
             
             // Update last play info
-            if (state.lastPlayPlayer !== null) {
+            const lastPlayEl = document.getElementById('last-play');
+            if (state.lastPlay && state.lastPlay.length > 0 && state.lastPlayPlayer !== null && state.lastPlayPlayer !== -1) {
                 const positions = ['South', 'West', 'North', 'East'];
-                document.getElementById('last-play-info').textContent = 
-                    `Last play by ${positions[state.lastPlayPlayer]}`;
+                const comboType = game.getCombinationType(state.lastPlay.map(c => new Card(c.suit, c.rank)));
+                lastPlayEl.textContent = `Last: ${comboType ? comboType.type : 'Unknown'} by ${positions[state.lastPlayPlayer]}`;
             } else {
-                document.getElementById('last-play-info').textContent = 'No cards played yet';
+                lastPlayEl.textContent = 'No cards played yet';
             }
             
-            // Update turn indicator
+            // Update turn indicator and active state
             document.querySelectorAll('.player-area').forEach((area, index) => {
                 if (index === state.currentPlayer) {
-                    area.classList.add('current-turn');
+                    area.classList.add('active');
                 } else {
-                    area.classList.remove('current-turn');
+                    area.classList.remove('active');
                 }
             });
             
+            // Update current turn display
+            const positions = ['You (South)', 'West Player', 'North Player', 'East Player'];
+            document.getElementById('current-turn').textContent = positions[state.currentPlayer];
+            
+            // Update round number
+            document.getElementById('round-number').textContent = state.round;
+            
             // Update scores
-            game.updateScores();
+            for (let i = 0; i < 4; i++) {
+                document.getElementById(`score-${i}`).textContent = state.scores[i];
+            }
+            
+            // Clear selected cards display
+            game.selectedCards = [];
+            document.getElementById('selected-cards').innerHTML = '<div style="color: #95a5a6;">Select cards to play</div>';
             
             // Enable/disable controls based on turn
             const playBtn = document.getElementById('play-btn');
@@ -2115,9 +2150,11 @@
             if (state.currentPlayer === playerPosition && !state.gameOver) {
                 playBtn.disabled = false;
                 passBtn.disabled = state.lastPlay.length === 0;
+                game.showStatus(`Your turn!`);
             } else {
                 playBtn.disabled = true;
                 passBtn.disabled = true;
+                game.showStatus(`Waiting for ${positions[state.currentPlayer]}...`);
             }
             
             // Check for game over
@@ -2151,11 +2188,20 @@
 
         // Override play and pass functions for multiplayer
         function playCards() {
-            if (game.currentPlayer !== playerPosition) return;
+            if (game.currentPlayer !== playerPosition) {
+                game.showStatus('Not your turn!');
+                return;
+            }
             
-            const selectedCards = game.players[playerPosition].hand.filter(card => card.selected);
+            const selectedCards = game.selectedCards;
             if (selectedCards.length === 0) {
-                game.showStatus('Select cards to play', true);
+                game.showStatus('Select cards to play');
+                return;
+            }
+            
+            // Validate the play
+            if (!game.isValidPlay(selectedCards)) {
+                game.showStatus('Invalid play! Check the rules.');
                 return;
             }
             
@@ -2168,10 +2214,13 @@
         }
 
         function pass() {
-            if (game.currentPlayer !== playerPosition) return;
+            if (game.currentPlayer !== playerPosition) {
+                game.showStatus('Not your turn!');
+                return;
+            }
             
-            if (game.lastPlay.length === 0) {
-                game.showStatus('Cannot pass on first play', true);
+            if (!game.lastPlay || game.lastPlay.length === 0) {
+                game.showStatus('Cannot pass on first play');
                 return;
             }
             
